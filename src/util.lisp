@@ -35,7 +35,7 @@
   (declare (ignore symb bind-forms body)))
 
 (defmacro vector-case (vec-and-options &body cases)
-  (destructuring-bind (vec &key (start 0) end case-insensitive)
+  (destructuring-bind (vec &key (start 0) end case-insensitive dont-raise-eof-error)
       (ensure-cons vec-and-options)
     (once-only (vec start)
       (let ((otherwise (gensym "otherwise")))
@@ -86,11 +86,13 @@
                                          (with-gensyms (main)
                                            (push `(,(case-candidates el)
                                                    (flet ((,main () ,@(cdr (car cases))))
-                                                     (handler-bind ((eof
-                                                                      (lambda (e)
-                                                                        (declare (ignore e))
-                                                                        (,main))))
-                                                       (advance))
+                                                     ,(if dont-raise-eof-error
+                                                         `(advance)
+                                                         `(handler-bind ((eof
+                                                                          (lambda (e)
+                                                                            (declare (ignore e))
+                                                                            (,main))))
+                                                           (advance)))
                                                      (,main)))
                                                  res-cases))))))
                                   map)
@@ -112,7 +114,7 @@
                       ,(when otherwise-case
                          `(return (progn ,@(cdr otherwise-case))))))))))))))
 
-(defmacro with-vector-parsing ((data &key (start 0) end) &body body)
+(defmacro with-vector-parsing ((data &key (start 0) end dont-raise-eof-error) &body body)
   (with-gensyms (g-end elem p)
     (once-only (data)
       `(locally (declare (optimize (speed 3) (safety 2)))
@@ -123,13 +125,19 @@
            (declare (type fixnum ,p ,g-end))
            (macrolet ((advance (&optional (step 1))
                         `(locally (declare (optimize (speed 3) (safety 2)))
-                           (incf ,',p ,step)
-                           ,@(if (= step 0)
-                                 ()
-                                 `((when (<= ,',g-end ,',p)
-                                     (error 'eof))
-                                   (setq ,',elem
-                                         (aref ,',data ,',p))))))
+                           (block nil
+                             (incf ,',p ,step)
+                             ,@(if (= step 0)
+                                   ()
+                                   ,(if dont-raise-eof-error
+                                        ``((if (<= ,',g-end ,',p)
+                                               nil
+                                               (setq ,',elem
+                                                     (aref ,',data ,',p))))
+                                        ``((when (<= ,',g-end ,',p)
+                                             ``(error 'eof))
+                                           (setq ,',elem
+                                                 (aref ,',data ,',p))))))))
                       (skip (&rest elems)
                         `(if (or ,@(loop for el in elems
                                          if (and (consp el)
@@ -167,8 +175,10 @@
                                              collect `(not (eql ,(cadr el) ,',elem))
                                            else
                                              collect `(eql ,el ,',elem)))
-                           (ignore-some-conditions (eof)
-                             (advance))))
+                           ,,(if dont-raise-eof-error
+                                 ``(advance)
+                                 ``(ignore-some-conditions (eof)
+                                     (advance)))))
                       (skip-until (fn)
                         `(loop until ,(if (symbolp fn)
                                           `(,fn ,',elem)
@@ -185,11 +195,13 @@
                              (flet ((,main ()
                                       (let ((,symb (subseq ,',data ,start ,',p)))
                                         ,@body)))
-                               (handler-bind ((eof
-                                                (lambda (e)
-                                                  (declare (ignore e))
-                                                  (,main))))
-                                 ,@bind-forms)
+                               ,@,(if dont-raise-eof-error
+                                      `bind-forms
+                                      ``((handler-bind ((eof
+                                                          (lambda (e)
+                                                            (declare (ignore e))
+                                                            (,main))))
+                                           ,@bind-forms)))
                                (,main)))))
                       (match (&rest vectors)
                         `(match-case
@@ -209,14 +221,14 @@
                           ,@(loop for vec in vectors
                                   collect `(,vec))))
                       (match-case (&rest cases)
-                        `(vector-case (,',data :start ,',p)
+                        `(vector-case (,',data :start ,',p :dont-raise-eof-error ,,dont-raise-eof-error)
                            ,@(if (find 'otherwise cases :key #'car :test #'eq)
                                  cases
                                  (append cases
                                          '((otherwise (error 'match-failed)))
                                          ))))
                       (match-i-case (&rest cases)
-                        `(vector-case (,',data :start ,',p :case-insensitive t)
+                        `(vector-case (,',data :start ,',p :case-insensitive t :dont-raise-eof-error ,,dont-raise-eof-error)
                            ,@(if (find 'otherwise cases :key #'car :test #'eq)
                                  cases
                                  (append cases
@@ -225,10 +237,16 @@
                       (<= ,g-end ,p))
                     (current () ,elem)
                     (pos () ,p))
-               (handler-case
-                   (tagbody
-                      (when (eofp)
-                        (error 'eof))
-                      (setq ,elem (aref ,data ,p))
-                      ,@body)
-                 (eof () ,p)))))))))
+               ,(if dont-raise-eof-error
+                    `(tagbody
+                        (when (eofp)
+                          (error 'eof))
+                        (setq ,elem (aref ,data ,p))
+                        ,@body)
+                    `(handler-case
+                         (tagbody
+                            (when (eofp)
+                              (error 'eof))
+                            (setq ,elem (aref ,data ,p))
+                            ,@body)
+                       (eof () ,p))))))))))
