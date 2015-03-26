@@ -126,20 +126,16 @@
            (declare (type fixnum ,p ,g-end))
            (macrolet ((advance (&optional (step 1))
                         (declare (type fixnum step))
-                        `(locally (declare (optimize (speed 3) (safety ,(if ',unsafely 0 2))))
-                           (block nil
-                             (incf ,',p ,step)
-                             ,@(if (= step 0)
-                                   ()
-                                   ,(if dont-raise-eof-error
-                                        ``((if (<= ,',g-end ,',p)
-                                               nil
-                                               (setq ,',elem
-                                                     (aref ,',data ,',p))))
-                                        ``((when (<= ,',g-end ,',p)
-                                             (error 'eof))
-                                           (setq ,',elem
-                                                 (aref ,',data ,',p))))))))
+                        `(locally (declare (optimize (speed 3) (safety ,,(if unsafely 0 2))))
+                           (incf ,',p ,step)
+                           (if (<= ,',g-end ,',p)
+                               ,,(if dont-raise-eof-error
+                                    nil
+                                    ``(error 'eof))
+                               ,(if (= step 0)
+                                    ()
+                                    `(setq ,',elem
+                                           (aref ,',data ,',p))))))
                       (skip (&rest elems)
                         `(if (or ,@(loop for el in elems
                                          if (and (consp el)
@@ -151,14 +147,13 @@
                              (error 'match-failed)))
                       (skip* (&rest elems)
                         `(loop
-                           (if (or ,@(loop for el in elems
-                                           if (and (consp el)
-                                                   (eq (car el) 'not))
-                                             collect `(not (eql ,(cadr el) ,',elem))
-                                           else
-                                             collect `(eql ,el ,',elem)))
-                               (advance)
-                               (return))))
+                           while (and (or ,@(loop for el in elems
+                                                  if (and (consp el)
+                                                          (eq (car el) 'not))
+                                                    collect `(not (eql ,(cadr el) ,',elem))
+                                                  else
+                                                    collect `(eql ,el ,',elem)))
+                                      (advance))))
                       (skip+ (&rest elems)
                         `(if (or ,@(loop for el in elems
                                          if (and (consp el)
@@ -178,19 +173,19 @@
                                            else
                                              collect `(eql ,el ,',elem)))
                            ,,(if dont-raise-eof-error
-                                 ``(or (advance) t)
+                                 ``(values t (advance))
                                  ``(ignore-some-conditions (eof)
                                      (advance)))))
                       (skip-until (fn)
-                        `(loop until ,(if (symbolp fn)
-                                          `(,fn ,',elem)
-                                          `(funcall ,fn ,',elem))
-                               do (advance)))
+                        `(loop until (or ,(if (symbolp fn)
+                                              `(,fn ,',elem)
+                                              `(funcall ,fn ,',elem))
+                                         (not (advance)))))
                       (skip-while (fn)
-                        `(loop while ,(if (symbolp fn)
-                                          `(,fn ,',elem)
-                                          `(funcall ,fn ,',elem))
-                               do (advance)))
+                        `(loop while (and ,(if (symbolp fn)
+                                               `(,fn ,',elem)
+                                               `(funcall ,fn ,',elem))
+                                          (advance))))
                       (bind ((symb &body bind-forms) &body body)
                         (with-gensyms (start main)
                           `(let ((,start ,',p))
@@ -242,11 +237,12 @@
                     (current () ,elem)
                     (pos () ,p))
                ,(if dont-raise-eof-error
-                    `(tagbody
-                        (when (eofp)
-                          (error 'eof))
-                        (setq ,elem (aref ,data ,p))
-                        ,@body)
+                    `(block nil
+                       (tagbody
+                          (when (eofp)
+                            (return))
+                          (setq ,elem (aref ,data ,p))
+                          ,@body))
                     `(handler-case
                          (tagbody
                             (when (eofp)
