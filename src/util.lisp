@@ -137,7 +137,7 @@
                                                (setq ,',elem
                                                      (aref ,',data ,',p))))
                                         ``((when (<= ,',g-end ,',p)
-                                             ``(error 'eof))
+                                             (error 'eof))
                                            (setq ,',elem
                                                  (aref ,',data ,',p))))))))
                       (skip (&rest elems)
