@@ -114,17 +114,19 @@
                       ,(when otherwise-case
                          `(return (progn ,@(cdr otherwise-case))))))))))))))
 
-(defmacro with-vector-parsing ((data &key (start 0) end dont-raise-eof-error) &body body)
+(defmacro with-vector-parsing ((data &key (start 0) end dont-raise-eof-error unsafely) &body body)
   (with-gensyms (g-end elem p)
     (once-only (data)
-      `(locally (declare (optimize (speed 3) (safety 2)))
+      `(locally (declare (optimize (speed 3) (safety ,(if unsafely 0 2))))
+         (declare (type simple-string ,data))
          (let (,elem
                (,p ,start)
                (,g-end ,(or end
                             `(length ,data))))
            (declare (type fixnum ,p ,g-end))
            (macrolet ((advance (&optional (step 1))
-                        `(locally (declare (optimize (speed 3) (safety 2)))
+                        (declare (type fixnum step))
+                        `(locally (declare (optimize (speed 3) (safety ,(if ',unsafely 0 2))))
                            (block nil
                              (incf ,',p ,step)
                              ,@(if (= step 0)
@@ -176,7 +178,7 @@
                                            else
                                              collect `(eql ,el ,',elem)))
                            ,,(if dont-raise-eof-error
-                                 ``(advance)
+                                 ``(or (advance) t)
                                  ``(ignore-some-conditions (eof)
                                      (advance)))))
                       (skip-until (fn)
@@ -221,6 +223,7 @@
                           ,@(loop for vec in vectors
                                   collect `(,vec))))
                       (match-case (&rest cases)
+                        (declare (type cons cases))
                         `(vector-case (,',data :start ,',p :dont-raise-eof-error ,,dont-raise-eof-error)
                            ,@(if (find 'otherwise cases :key #'car :test #'eq)
                                  cases
@@ -228,6 +231,7 @@
                                          '((otherwise (error 'match-failed)))
                                          ))))
                       (match-i-case (&rest cases)
+                        (declare (type cons cases))
                         `(vector-case (,',data :start ,',p :case-insensitive t :dont-raise-eof-error ,,dont-raise-eof-error)
                            ,@(if (find 'otherwise cases :key #'car :test #'eq)
                                  cases
